@@ -4,7 +4,7 @@ import 'dart:async';
 import 'package:location/location.dart';
 import 'package:flutter/services.dart';
 import 'package:permission/permission.dart';
-import 'package:http/http.dart' as http;
+import 'package:places/services/map_api.dart';
 
 class Map extends StatefulWidget {
   @override
@@ -13,14 +13,15 @@ class Map extends StatefulWidget {
 
 class MapState extends State<Map> {
   LocationData currentLocation;
-  var location = new Location();
+  var location = Location();
   Completer<GoogleMapController> _controller = Completer();
   bool permission = false;
   String error;
+  Set<Marker> markers = Set();
+  bool isLoading = false;
 
   static final CameraPosition _kGooglePlex = CameraPosition(
     target: LatLng(37.42796133580664, -122.085749655962),
-    zoom: 14.4746,
   );
 
   @override
@@ -29,12 +30,34 @@ class MapState extends State<Map> {
     getLocation();
   }
 
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+        child: Stack(
+      children: <Widget>[
+        GoogleMap(
+          mapType: MapType.normal,
+          initialCameraPosition: _kGooglePlex,
+          onMapCreated: (GoogleMapController controller) {
+            _controller.complete(controller);
+          },
+          markers: markers,
+        ),
+        Center(
+          child: CircularProgressIndicator(
+            strokeWidth: isLoading ? 4 : 0,
+          ),
+        )
+      ],
+    ));
+  }
+
   getLocation() async {
     try {
       permission = await location.hasPermission();
       if (!permission) {
         var permissions =
-        await Permission.requestPermissions([PermissionName.Location]);
+            await Permission.requestPermissions([PermissionName.Location]);
         permission = permissions[0].permissionStatus == PermissionStatus.allow;
       }
       if (permission) {
@@ -45,60 +68,47 @@ class MapState extends State<Map> {
         error = 'Permission denied';
       } else if (e.code == 'PERMISSION_DENIED_NEVER_ASK') {
         error =
-        'Permission denied - please ask the user to enable it from the app settings';
+            'Permission denied - please ask the user to enable it from the app settings';
       }
       currentLocation = null;
     }
     if (currentLocation != null) {
-      changeCameraPosition(
-          LatLng(currentLocation.latitude, currentLocation.longitude));
+      var location =
+          LatLng(currentLocation.latitude, currentLocation.longitude);
+      changeCameraPosition(location);
+      populateMarkers(location);
     }
     print(error.toString());
-    fetchPost();
   }
 
   changeCameraPosition(LatLng target) async {
     final GoogleMapController controller = await _controller.future;
     if (controller != null) {
       controller.animateCamera(CameraUpdate.newCameraPosition(
-        CameraPosition(
-            bearing: 192.8334901395799,
-            target: target,
-            tilt: 59.440717697143555,
-            zoom: 19.151926040649414),
+        CameraPosition(target: target, zoom: 15),
       ));
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      child: GoogleMap(
-        mapType: MapType.normal,
-        initialCameraPosition: _kGooglePlex,
-        onMapCreated: (GoogleMapController controller) {
-          _controller.complete(controller);
-        },
-      ),
-    );
-  }
-
-//  request() {
-//    https
-//    : //maps.googleapis.com/maps/api/place/nearbysearch/json?location=-33.8670522,151.1957362&radius=1500&type=restaurant&keyword=cruise&key=YOUR_API_KEY
-//
-//    }
-
-  fetchPost() async {
-    final response = await http.get(
-        'https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=-33.8670522,151.1957362&radius=1500&type=restaurant&keyword=cruise&key=AIzaSyAGZVKAjdk0jX7xeXqGRAwENFDn0Mlv6WE');
-
-    if (response.statusCode == 200) {
-      // If server returns an OK response, parse the JSON
-//      return Post.fromJson(json.decode(response.body));
-    } else {
-      // If that response was not OK, throw an error.
-      throw Exception('Failed to load post');
+  populateMarkers(LatLng location) async {
+    setState(() {
+      isLoading = true;
+    });
+    var placesList = await MapApi.getPlaces(location, 'atm', 1000);
+    if (placesList != null) {
+      List<Marker> markersList = placesList.places
+          .map<Marker>((i) => Marker(
+              markerId: MarkerId(i.id),
+              position:
+                  LatLng(i.geometry.location.lat, i.geometry.location.lng),
+              infoWindow: InfoWindow(title: i.name)))
+          .toList();
+      if (markersList.length > 0) {
+        markers.addAll(markersList);
+        setState(() {
+          isLoading = false;
+        });
+      }
     }
   }
 }
